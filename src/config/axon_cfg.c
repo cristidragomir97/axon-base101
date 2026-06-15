@@ -41,8 +41,9 @@ static uint32_t crc32(const void *data, size_t len) {
 
 void axon_cfg_defaults(void) {
     memset(&g_cfg, 0, sizeof(g_cfg));
-    // Servos OFF by default — DDSM-only until explicitly enabled.
-    g_cfg.servos_enabled = false;
+    // Servos ON by default. (The node runs every configured servo regardless
+    // of this flag anyway and tolerates offline ones; the flag is advisory.)
+    g_cfg.servos_enabled = true;
     // Stock 6-DOF arm (IDs 1..6, joint names "1".."6"), so re-enabling the
     // subsystem reproduces the previous behaviour.
     g_cfg.servo_count = 6;

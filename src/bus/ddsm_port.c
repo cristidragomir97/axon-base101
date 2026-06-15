@@ -1,7 +1,6 @@
 #include "ddsm_port.h"
 
 #include "pins.h"
-#include "led.h"
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
 #include "hardware/pio.h"
@@ -10,12 +9,13 @@
 #include "uart_tx.pio.h"
 #include "uart_rx.pio.h"
 
-// State machine allocation (see pins.h for the full PIO map). PIO0 is fully
-// taken by the two servo buses, so the four wheel motors live on PIO1 and
-// PIO2 (the lidar moved to hardware uart1, and there is no NeoPixel):
+// State machine allocation (see pins.h for the full PIO map). PIO0 is taken by
+// the servo half-duplex bus, so the four wheel motors live on PIO1 and PIO2:
 //   FR: PIO1 SM0/SM1   FL: PIO1 SM2/SM3
 //   BR: PIO2 SM0/SM1   BL: PIO2 SM2/SM3
 // ddsm_port_init() loads the uart_tx/uart_rx programs into PIO1 and PIO2.
+// On the rev2 RP2350A every DDSM pin is GP19..GP26, so no pio_set_gpio_base()
+// window shift is needed (that was only required for the rev1 GP32-39 layout).
 
 typedef struct {
     PIO pio;
@@ -23,18 +23,17 @@ typedef struct {
     uint8_t sm_rx;
     uint8_t tx_pin;
     uint8_t rx_pin;
-    led_id_t led;
 } ddsm_port_cfg_t;
 
 static const ddsm_port_cfg_t port_cfg[DDSM_PORT_COUNT] = {
     [DDSM_FR] = {.pio = pio1, .sm_tx = 0, .sm_rx = 1,
-                 .tx_pin = PIN_DDSM_FR_TX, .rx_pin = PIN_DDSM_FR_RX, .led = LED_UART0},
+                 .tx_pin = PIN_DDSM_FR_TX, .rx_pin = PIN_DDSM_FR_RX},
     [DDSM_FL] = {.pio = pio1, .sm_tx = 2, .sm_rx = 3,
-                 .tx_pin = PIN_DDSM_FL_TX, .rx_pin = PIN_DDSM_FL_RX, .led = LED_UART0},
+                 .tx_pin = PIN_DDSM_FL_TX, .rx_pin = PIN_DDSM_FL_RX},
     [DDSM_BR] = {.pio = pio2, .sm_tx = 0, .sm_rx = 1,
-                 .tx_pin = PIN_DDSM_BR_TX, .rx_pin = PIN_DDSM_BR_RX, .led = LED_UART0},
+                 .tx_pin = PIN_DDSM_BR_TX, .rx_pin = PIN_DDSM_BR_RX},
     [DDSM_BL] = {.pio = pio2, .sm_tx = 2, .sm_rx = 3,
-                 .tx_pin = PIN_DDSM_BL_TX, .rx_pin = PIN_DDSM_BL_RX, .led = LED_UART0},
+                 .tx_pin = PIN_DDSM_BL_TX, .rx_pin = PIN_DDSM_BL_RX},
 };
 
 #define DDSM_RX_BUF_SIZE 128
@@ -49,14 +48,6 @@ static ddsm_port_state_t port_state[DDSM_PORT_COUNT];
 static bool initialized = false;
 
 void ddsm_port_init(uint32_t baudrate) {
-    // The DDSM motors are on GP32-39. On the RP2350/RP2354B a PIO instance can
-    // only address a 32-pin window; the default base (0) covers GP0-31, so
-    // PIO1/PIO2 cannot reach GP32-39 at all — the SMs silently wrap to GP0-7.
-    // Shift both blocks to the GP16-47 window, before the SMs are configured.
-    // (PIO0/servos stay at base 0 for GP5-8.)
-    pio_set_gpio_base(pio1, 16);
-    pio_set_gpio_base(pio2, 16);
-
     // Load one copy of the uart_tx/uart_rx programs into each PIO block we use
     // (PIO1 for the front wheels, PIO2 for the back wheels).
     uint tx_off[2], rx_off[2];
@@ -86,7 +77,6 @@ uint32_t ddsm_port_write(ddsm_port_id_t id, const uint8_t *data, uint32_t len) {
     while (!pio_sm_is_tx_fifo_empty(cfg->pio, cfg->sm_tx)) {
         tight_loop_contents();
     }
-    led_activity(cfg->led);
     return len;
 }
 

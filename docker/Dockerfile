@@ -3,7 +3,12 @@
 # The stock `eclipse/zenoh` image is built without the (non-default)
 # `transport_serial` Cargo feature, so it cannot speak to the Axon's
 # zenoh-pico serial link over USB CDC. This image rebuilds `zenohd` with that
-# feature and overlays it onto the official image (keeping its runtime base).
+# feature and ships it on a minimal Debian base.
+#
+# NOTE: we deliberately do NOT overlay onto `eclipse/zenoh:latest` — that image
+# is Alpine/musl, and our glibc-built binary fails there at runtime with
+# "exec /usr/local/bin/zenohd: no such file or directory" (the musl image has
+# no ld-linux glibc loader). The runtime base below matches the glibc builder.
 #
 # IMPORTANT: keep the router protocol-compatible with the firmware's vendored
 # zenoh-pico. That is currently 1.9.0 (see lib/zenoh-pico/include/zenoh-pico.h,
@@ -18,15 +23,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         git clang libclang-dev && rm -rf /var/lib/apt/lists/*
 RUN git clone --depth 1 --branch "${ZENOH_REF}" https://github.com/eclipse-zenoh/zenoh /src
 WORKDIR /src
-RUN cargo build --release -p zenohd --features transport_serial \
+# `transport_serial` is a feature of the `zenoh` crate, NOT the `zenohd` binary
+# crate (zenohd 1.x only defines `default`/`shared-memory`). Enable it on the
+# dependency with the `zenoh/<feature>` syntax, else cargo errors with
+# "the package 'zenohd' does not contain this feature: transport_serial".
+RUN cargo build --release -p zenohd --features zenoh/transport_serial \
  && cp target/release/zenohd /zenohd
 
-# --- runtime: official image + the serial-enabled binary -------------------
-FROM eclipse/zenoh:latest
+# --- runtime: minimal glibc base + the serial-enabled binary ---------------
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /zenohd /usr/local/bin/zenohd
 COPY zenoh-serial.json5 /etc/zenoh/serial.json5
 
-# Override the stock entrypoint so the path is deterministic regardless of
-# where the base image placed its own zenohd.
 ENTRYPOINT ["/usr/local/bin/zenohd"]
 CMD ["-c", "/etc/zenoh/serial.json5"]

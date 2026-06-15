@@ -12,7 +12,6 @@
 #include "picoserdes.h"
 
 #include "pins.h"
-#include "led.h"
 #include "../dbg.h"
 #include "axon_config.h"
 #include "../config/axon_cfg.h"
@@ -59,6 +58,20 @@ static picoros_publisher_t pub_joint_states = {
         .rihs_hash = ROSTYPE_HASH(ros_JointState),
     },
 };
+
+// Liveness counters surfaced to the main-loop heartbeat (axon_node_status).
+static volatile uint32_t base_cmd_rx = 0;
+static volatile uint32_t arm_cmd_rx = 0;
+static uint32_t joint_pub_count = 0;
+static uint32_t imu_pub_count = 0;
+
+void axon_node_status(uint32_t *base_cmds, uint32_t *arm_cmds,
+                      uint32_t *joint_pubs, uint32_t *imu_pubs) {
+    if (base_cmds)  *base_cmds  = base_cmd_rx;
+    if (arm_cmds)   *arm_cmds   = arm_cmd_rx;
+    if (joint_pubs) *joint_pubs = joint_pub_count;
+    if (imu_pubs)   *imu_pubs   = imu_pub_count;
+}
 
 #if AXON_IMU_ENABLE
 static bool imu_online = false;
@@ -152,6 +165,10 @@ static void on_base_cmd(uint8_t *rx_data, size_t data_len) {
     static double last_vals[AXON_DDSM_COUNT];
     static bool have_last = false;
 
+    if (++base_cmd_rx == 1) {
+        dbg_printf("[ros ] first base_cmd received (%u bytes)\n", (unsigned)data_len);
+    }
+
     double data[CMD_MAX_VALUES];
     uint32_t n = parse_cmd(rx_data, data_len, data, CMD_MAX_VALUES);
 
@@ -200,6 +217,10 @@ static void on_arm_cmd(uint8_t *rx_data, size_t data_len) {
     static double last_vals[AXON_SERVO_MAX];
     static bool have_last = false;
 
+    if (++arm_cmd_rx == 1) {
+        dbg_printf("[ros ] first arm_cmd received (%u bytes)\n", (unsigned)data_len);
+    }
+
     if (st_motor_count == 0) {
         return;
     }
@@ -243,13 +264,10 @@ void axon_node_motors_init(void) {
     }
 
     // ST3215 servos: build the table from runtime config, ping, set position
-    // mode. Skipped entirely when the servo subsystem is disabled.
+    // mode. Every configured (per-servo-enabled) servo is included regardless
+    // of the advisory g_cfg.servos_enabled flag; offline servos stay in the
+    // table (marked offline) so their joints/topics still exist.
     st_motor_count = 0;
-    if (!g_cfg.servos_enabled) {
-        dbg_printf("[axon] ST3215 servos disabled (DDSM-only)\n");
-        return;
-    }
-
     for (uint8_t i = 0; i < g_cfg.servo_count && st_motor_count < AXON_SERVO_MAX; i++) {
         if (!g_cfg.servos[i].enable) {
             continue;
@@ -293,9 +311,6 @@ void axon_imu_init(void) {
 
     imu_online = bno055_init(AXON_IMU_I2C, AXON_IMU_ADDR);
     dbg_printf("[axon] BNO055 IMU: %s\n", imu_online ? "online" : "no response");
-    if (imu_online) {
-        led_set(LED_I2C, true);
-    }
 #endif
 }
 
@@ -305,10 +320,8 @@ void axon_imu_init(void) {
 #if AXON_MOTOR_TELEMETRY_ENABLE
 static void declare_st_telemetry_pubs(void) {
     for (uint8_t i = 0; i < st_motor_count; i++) {
-        // Only expose telemetry for servos that answered the boot-time ping.
-        if (!st_motors[i].online) {
-            continue;
-        }
+        // Declare telemetry topics for every configured servo, online or not,
+        // so the topics always exist (offline ones simply publish nothing).
         st_telemetry_pubs_t *p = &st_telemetry_pubs[i];
         const char *name = st_motors[i].joint;
         // ROS topic tokens can't start with a digit
@@ -356,12 +369,12 @@ bool axon_node_declare(void) {
     }
 
 #if AXON_IMU_ENABLE
-    if (imu_online) {
-        if (picoros_publisher_declare(&node, &pub_imu) != PICOROS_OK ||
-            picoros_publisher_declare(&node, &pub_mag) != PICOROS_OK ||
-            picoros_publisher_declare(&node, &pub_temp) != PICOROS_OK) {
-            return false;
-        }
+    // Declare the IMU topics whether or not the BNO055 answered at boot, so the
+    // topics always exist. When offline we simply publish nothing (no fake data).
+    if (picoros_publisher_declare(&node, &pub_imu) != PICOROS_OK ||
+        picoros_publisher_declare(&node, &pub_mag) != PICOROS_OK ||
+        picoros_publisher_declare(&node, &pub_temp) != PICOROS_OK) {
+        return false;
     }
 #endif
 
@@ -387,7 +400,11 @@ bool axon_node_declare(void) {
 #endif
     }
 
-    dbg_printf("[axon] node '%s' declared (domain %u)\n", AXON_NODE_NAME, AXON_ROS_DOMAIN_ID);
+    dbg_printf("[ros ] declared: joint_states + imu/mag/temperature (IMU %s) ; "
+               "sub base_cmd%s ; %u servos configured\n",
+               imu_online ? "online" : "OFFLINE",
+               st_motor_count > 0 ? " + arm_cmd + telemetry" : "",
+               (unsigned)st_motor_count);
     return true;
 }
 
@@ -399,7 +416,6 @@ static void publish_joint_states(void) {
     double positions[AXON_JOINT_MAX] = {0};
     double velocities[AXON_JOINT_MAX] = {0};
     double efforts[AXON_JOINT_MAX] = {0};
-    bool populated = false;
 
     // Active slots: the 4 wheels plus however many servos are configured.
     uint32_t joint_count = AXON_DDSM_COUNT + st_motor_count;
@@ -408,48 +424,40 @@ static void publish_joint_states(void) {
     }
 
     // DDSM210 wheels: absolute multi-turn position from mileage + encoder.
+    // Every wheel slot is always named; a non-responding wheel reports zeros.
     for (int i = 0; i < AXON_DDSM_COUNT; i++) {
         const axon_ddsm_motor_cfg_t *m = &AXON_DDSM_MOTORS[i];
-        ddsm210_odometry_t odom;
-        if (!ddsm210_get_odometry(m->port, m->motor_id, &odom)) {
-            continue;
-        }
-        double fractional = ((double)odom.position / DDSM210_ENCODER_TICKS) * TWO_PI;
-        double total = (double)odom.mileage_laps * TWO_PI + fractional;
-
         names[m->state_index] = m->joint_name;
-        positions[m->state_index] = total * m->direction;
-        velocities[m->state_index] = 0.0;
-        populated = true;
+        ddsm210_odometry_t odom;
+        if (ddsm210_get_odometry(m->port, m->motor_id, &odom)) {
+            double fractional = ((double)odom.position / DDSM210_ENCODER_TICKS) * TWO_PI;
+            double total = (double)odom.mileage_laps * TWO_PI + fractional;
+            positions[m->state_index] = total * m->direction;
+        }
+        // offline / read failure -> leave position & velocity at zero
     }
 
-    // ST3215 servos.
+    // ST3215 servos. Every configured servo slot is always named; an offline
+    // or non-responding servo reports zeros.
     double steps_per_radian = (double)AXON_ST_TICKS_PER_REV / TWO_PI;
     for (uint8_t i = 0; i < st_motor_count; i++) {
         st_motor_t *m = &st_motors[i];
-        if (!m->online) {
-            continue;
-        }
-        uint16_t raw_pos;
-        int16_t speed;
-        if (!st3215_read_state(m->id, &raw_pos, &speed)) {
-            continue;
-        }
         uint8_t si = m->state_index;
         if (si >= joint_count) {
             continue;
         }
         names[si] = m->joint;
-        positions[si] = ((double)((int32_t)raw_pos - AXON_ST_TICKS_PER_REV / 2) /
-                         AXON_ST_TICKS_PER_REV) * TWO_PI * m->direction;
-        velocities[si] = ((double)speed / steps_per_radian) * m->direction;
-        populated = true;
+        uint16_t raw_pos;
+        int16_t speed;
+        if (m->online && st3215_read_state(m->id, &raw_pos, &speed)) {
+            positions[si] = ((double)((int32_t)raw_pos - AXON_ST_TICKS_PER_REV / 2) /
+                             AXON_ST_TICKS_PER_REV) * TWO_PI * m->direction;
+            velocities[si] = ((double)speed / steps_per_radian) * m->direction;
+        }
+        // offline / read failure -> leave position & velocity at zero
     }
 
-    if (!populated) {
-        return;
-    }
-
+    // Always publish — joint_states stays alive even with nothing responding.
     uint64_t now_us = time_us_64();
     ros_JointState msg = {
         .header = {
@@ -468,6 +476,7 @@ static void publish_joint_states(void) {
     size_t len = ps_serialize(pub_buf, &msg, sizeof(pub_buf));
     if (len > 0) {
         picoros_publish(&pub_joint_states, pub_buf, len);
+        joint_pub_count++;
     }
 }
 
@@ -552,7 +561,10 @@ static void publish_imu(void) {
     imu.linear_acceleration_covariance[0] = imu.linear_acceleration_covariance[4] =
         imu.linear_acceleration_covariance[8] = AXON_IMU_LINACC_COV;
     len = ps_serialize(pub_buf, &imu, sizeof(pub_buf));
-    if (len > 0) picoros_publish(&pub_imu, pub_buf, len);
+    if (len > 0) {
+        picoros_publish(&pub_imu, pub_buf, len);
+        imu_pub_count++;
+    }
 
     ros_MagneticField mag;
     memset(&mag, 0, sizeof(mag));

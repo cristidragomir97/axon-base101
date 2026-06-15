@@ -2,92 +2,63 @@
 #define AXON_PINOUT_H
 
 // ============================================================
-// RoboCore Axon — RP2350 Pin Assignments
-// Generated from KiCad schematic, GPIO0–GPIO28
+// RoboCore Axon — rev2 board, RP2350A (30 GPIO, GP0..GP29)
+//
+// This revision drops the rev1 RS485 / CAN / second-UART / NeoPixel
+// hardware. The firmware drives:
+//   - 4x DDSM210 wheel motors, one PIO UART each   (GP19..GP26)
+//   - 1x unified Feetech/Dynamixel half-duplex servo bus (GP7/8 + TXEN)
+//   - 1x RPLidar on the uart1 hardware peripheral   (GP4/5)
+//   - BNO055 IMU on i2c1                             (GP14/15)
+//   - config/sniff button                           (GP17)
+//
+// All four DDSM UART pairs were validated by PIO-UART loopback on this
+// board (GP19->20, 21->22, 23->24, 25->26 all 6/6 OK).
 // ============================================================
 
-// --- RS485 Bus (isolated, ADM2587E or similar) ---
-#define PIN_RS485_TX         0
-#define PIN_RS485_RX         1
-#define PIN_RS485_DE         2   // direction enable
+// --- Lidar (RPLidar C1) — hardware uart1 ---
+// GP4 = UART1 TX, GP5 = UART1 RX (RP2350 function select F2).
+#define PIN_LIDAR_TX         4
+#define PIN_LIDAR_RX         5
 
-// --- UART0 (general purpose / DDSM?) ---
-#define PIN_UART0_TX         3
-#define PIN_UART0_RX         4
-
-// --- UART1 (general purpose / lidar passthrough?) ---
-#define PIN_UART1_TX         5
-#define PIN_UART1_RX         6
-
-// --- UART2 (optional additional general purpose) ---
-#ifdef ENABLE_UART2
-#define PIN_UART2_TX        19
-#define PIN_UART2_RX        20
-#endif
-
-// --- Motor Bus (unified Feetech/Dynamixel half-duplex) ---
+// --- Servo bus (unified Feetech STS/SCS + Dynamixel, half-duplex, PIO) ---
+// One PIO UART (pio0 SM0/SM1) with an external direction-enable line.
 #define PIN_MOTOR_TX         7
 #define PIN_MOTOR_RX         8
-#define PIN_MOTOR_TXEN      16   // TX enable (direction control)
+#define PIN_MOTOR_TXEN      16   // TX enable / bus direction control
 
-// --- SPI (mikroBUS / MCP2518FD CAN controller) ---
-#define PIN_CAN_INT          9   // CAN interrupt pin (was PIN_SPI_RST)
-#define PIN_SPI_SCK         10
-#define PIN_SPI_MOSI        11
-#define PIN_SPI_MISO        12
-#define PIN_SPI_CS          13
+// --- I2C (BNO055 IMU, Qwiic) — i2c1 ---
+#define PIN_IMU_SDA         14
+#define PIN_IMU_SCL         15
 
-// --- I2C (Qwiic sensors) ---
-#define PIN_SDA             14
-#define PIN_SCL             15
+// --- Config / bus-sniff button (held LOW at boot -> config mode) ---
+#define PIN_CONFIG_BUTTON   17
 
-// --- NeoPixel Activity LEDs (6 LEDs on single data line) ---
-#define PIN_NEOPIXELS       18   // GPIO18 - NeoPixel Data Out
-
-// --- GPIO Pins (general purpose) ---
-#define PIN_SNIFF_ENABLE    17   // GPIO17 - Bus Sniffer Enable
-#ifndef ENABLE_UART2
-#define PIN_GP19            19   // GPIO19 - General Purpose (or UART2_TX if enabled)
-#define PIN_GP20            20   // GPIO20 - General Purpose (or UART2_RX if enabled)
-#endif
-#define PIN_GP21            21   // GPIO21 - General Purpose
-#define PIN_GP22            22   // GPIO22 - General Purpose
+// --- DDSM210 wheel motors — four independent PIO UARTs ---
+// Lower pin = MCU TX (-> motor RX), higher pin = MCU RX (<- motor TX).
+// If a motor stays silent, swap TX/RX for that pair (board connector wiring).
+//   FR -> pio1 SM0/SM1   FL -> pio1 SM2/SM3
+//   BR -> pio2 SM0/SM1   BL -> pio2 SM2/SM3
+#define PIN_DDSM_FR_TX      19
+#define PIN_DDSM_FR_RX      20
+#define PIN_DDSM_FL_TX      21
+#define PIN_DDSM_FL_RX      22
+#define PIN_DDSM_BR_TX      23
+#define PIN_DDSM_BR_RX      24
+#define PIN_DDSM_BL_TX      25
+#define PIN_DDSM_BL_RX      26
 
 // ============================================================
-// PIO Analysis — RP2350 has 3 PIO blocks × 4 SM = 12 total
+// PIO state-machine budget — RP2350 has 3 PIO blocks x 4 SM = 12 SMs.
 //
-// Hardware UART candidates:
-//   GPIO0/1 (RS485) → HW UART0 TX/RX ✓ (exact match)
-//   All others: pin assignments don't align with HW UART func select
+//   PIO0:  servo half-duplex   SM0 TX (GP7)   SM1 RX (GP8)
+//   PIO1:  DDSM FR             SM0 TX (GP19)  SM1 RX (GP20)
+//          DDSM FL             SM2 TX (GP21)  SM3 RX (GP22)
+//   PIO2:  DDSM BR             SM0 TX (GP23)  SM1 RX (GP24)
+//          DDSM BL             SM2 TX (GP25)  SM3 RX (GP26)
 //
-// Assuming RS485 uses HW UART0:
-//
-//   PIO0:
-//     SM0: MOTOR TX  (GPIO7)
-//     SM1: MOTOR RX  (GPIO8)
-//     SM2: free
-//     SM3: free
-//
-//   PIO1:
-//     SM0: UART0 TX  (GPIO3)
-//     SM1: UART0 RX  (GPIO4)
-//     SM2: UART1 TX  (GPIO5)
-//     SM3: UART1 RX  (GPIO6)
-//
-//   PIO2 (Core 1 - LED Controller):
-//     SM0: NeoPixel WS2812 (GPIO18)
-//     SM1: [UART2 TX (GPIO19) if ENABLE_UART2]
-//     SM2: [UART2 RX (GPIO20) if ENABLE_UART2] 
-//     SM3: free
-//
-//   Total: 7 of 12 state machines used (9 if UART2 enabled), 5 free (3 if UART2 enabled)
-//
-// If RS485 also needs PIO (e.g. for timing-critical DE control):
-//     Move RS485 TX/RX to PIO0 SM2/SM3 → 9 used, 3 free
-//
-// UART1 moved from GPIO19/20 to GPIO5/6 in new board revision
-// (GPIO5/6 were previously Feetech pins)
-
+//   Total: 10 of 12 SMs used (no gpio_base needed — every pin is GP0..29).
+//   Lidar (uart1) and IMU (i2c1) use hardware peripherals, not PIO.
 // ============================================================
 
 #endif // AXON_PINOUT_H

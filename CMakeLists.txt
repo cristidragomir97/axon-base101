@@ -1,5 +1,5 @@
 # Axon ROS Node Firmware
-# Target: RoboCore Axon 2 Board (RP2354B, QFN-80, 48 GPIO)
+# Target: RoboCore Axon 2 Board, rev2 (RP2350A, 30 GPIO)
 #
 # Native Pico-ROS (zenoh) node: ST3215 + DDSM210 motor control in
 # firmware, lidar UART forwarded over USB CDC.
@@ -112,24 +112,51 @@ target_compile_definitions(picoros PUBLIC -DUSER_TYPE_FILE="axon_types.h")
 target_link_libraries(picoros zenohpico::lib microcdr)
 
 # ---------------------------------------------------------------------------
-# Firmware
+# Firmware — native Pico-ROS node (rev2 / RP2350A)
 # ---------------------------------------------------------------------------
-# TEMPORARY (rev2 bring-up): axon_firmware == PIO UART loopback tester.
-# Restore the real firmware with:  git checkout -- CMakeLists.txt
 add_executable(axon_firmware
-    src/test/pio_uart_test.c
+    main.c
+    usb_descriptors.c
+    src/dbg.c
+    src/bus/half_duplex.c
+    src/bus/lidar_uart.c
+    src/bus/ddsm_port.c
+    src/motors/ddsm210.c
+    src/motors/st3215.c
+    src/sensors/bno055.c
+    src/config/axon_cfg.c
+    src/config/cfg_console.c
+    src/config/motor_test.c
+    src/ros/axon_node.c
 )
 
-pico_set_program_name(axon_firmware "Axon PIO UART Test")
-pico_set_program_version(axon_firmware "0.1")
+pico_set_program_name(axon_firmware "Axon ROS Node")
+pico_set_program_version(axon_firmware "3.0")
 
+# The firmware manages USB itself (custom 3-CDC TinyUSB descriptors); keep the
+# SDK stdio off both transports so it cannot fight TinyUSB or claim a CDC.
 pico_enable_stdio_uart(axon_firmware 0)
-pico_enable_stdio_usb(axon_firmware 1)
+pico_enable_stdio_usb(axon_firmware 0)
+
+target_include_directories(axon_firmware PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}        # pins.h, tusb_config.h, usb_descriptors.h
+    ${CMAKE_CURRENT_LIST_DIR}/src
+)
 
 target_link_libraries(axon_firmware
     pico_stdlib
+    pico_unique_id
+    pico_rand
     hardware_pio
     hardware_clocks
+    hardware_uart
+    hardware_i2c
+    hardware_irq
+    hardware_flash
+    hardware_watchdog
+    tinyusb_device
+    tinyusb_board
+    picoros
 )
 
 pico_add_extra_outputs(axon_firmware)

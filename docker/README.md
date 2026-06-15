@@ -7,7 +7,7 @@ feature, so it can't do this out of the box.
 
 This directory builds an image that:
 
-1. rebuilds `zenohd` from source with `--features transport_serial`, and
+1. rebuilds `zenohd` from source with `--features zenoh/transport_serial`, and
 2. overlays it onto `eclipse/zenoh:latest` (so you keep the official runtime).
 
 ## Prerequisites
@@ -54,6 +54,44 @@ ros2 topic echo /motor_manager/joint_states
 
 To instead federate with an existing `rmw_zenohd`, add a `connect` endpoint
 to `zenoh-serial.json5` pointing at your other router.
+
+## ROS 2 test sidecar (Jazzy + rosboard)
+
+If you don't have ROS 2 on the host, the `ros-sidecar` service is a self-
+contained ROS 2 **Jazzy** container with `rmw_zenoh_cpp` (configured as a
+client of the router above, see `ros/session.json5`) and **rosboard** for a
+browser dashboard.
+
+```bash
+cd docker
+docker compose up --build              # router + rosboard dashboard
+```
+
+Then open **http://localhost:8888** and click the firmware's topics to plot
+them live (`/imu/data`, `/motor_manager/joint_states`, telemetry, …).
+
+Drive the board from the same container (the firmware subscribes to these):
+
+```bash
+# spin all four wheels (rad/s): [front_left, front_right, back_left, back_right]
+docker compose run --rm ros-sidecar \
+  ros2 topic pub -1 /motor_manager/base_cmd \
+  std_msgs/msg/Float64MultiArray '{data: [2.0, 2.0, 2.0, 2.0]}'
+
+# move arm servos (position, by arm_cmd order)
+docker compose run --rm ros-sidecar \
+  ros2 topic pub -1 /motor_manager/arm_cmd \
+  std_msgs/msg/Float64MultiArray '{data: [0.0]}'
+
+# or just poke around
+docker compose run --rm ros-sidecar ros2 topic list
+docker compose run --rm ros-sidecar shell      # interactive ROS shell
+```
+
+Requirements: the firmware must be in **normal mode** (not config mode) so it
+opens the zenoh client link, and the `zenoh-axon` router must be up. Both
+containers use host networking, so `localhost:7447` and `localhost:8888` work
+directly.
 
 ## Notes / troubleshooting
 

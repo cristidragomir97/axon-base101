@@ -22,6 +22,7 @@
 #define AXON_NODE_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 // Initialize motors (modes, torque, hold positions). Call before the
 // zenoh session is opened; pure bus I/O.
@@ -38,5 +39,10 @@ bool axon_node_declare(void);
 // Periodic work: telemetry publishing at the configured rates.
 // Call from the main loop (after each picoros_single_threaded_loop()).
 void axon_node_spin(void);
+
+// Liveness counters for the debug-port heartbeat (any pointer may be NULL):
+// commands received on base_cmd/arm_cmd and joint_states/IMU messages published.
+void axon_node_status(uint32_t *base_cmds, uint32_t *arm_cmds,
+                      uint32_t *joint_pubs, uint32_t *imu_pubs);
 
 #endif // AXON_NODE_H

@@ -1,7 +1,6 @@
 #include "lidar_uart.h"
 
 #include "pins.h"
-#include "led.h"
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
 #include "hardware/uart.h"
@@ -60,7 +59,6 @@ void lidar_uart_set_baudrate(uint32_t baudrate) {
 uint32_t lidar_uart_write(const uint8_t *data, uint32_t len) {
     if (!initialized || len == 0) return 0;
     uart_write_blocking(LIDAR_UART, data, len);
-    led_activity(LED_UART1);
     return len;
 }
 
@@ -72,7 +70,6 @@ uint32_t lidar_uart_read(uint8_t *data, uint32_t max_len) {
         data[count++] = rx_buf[rx_tail];
         rx_tail = (rx_tail + 1) % LIDAR_RX_BUF_SIZE;
     }
-    if (count > 0) led_activity(LED_UART1);
     return count;
 }
 
