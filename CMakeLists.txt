@@ -27,12 +27,9 @@ endif()
 set(PICO_BOARD pico2 CACHE STRING "Board type")
 set(PICO_PLATFORM rp2350 CACHE STRING "Platform type")
 
-# The Axon 2 uses the RP2354B (QFN-80) which has 48 GPIOs (GP0..47). The
-# stock pico2 board header defaults to the RP2350A (30 GPIO) part, but guards
-# the choice with #ifndef, so selecting the B variant here makes GP32..39
-# (the DDSM motor pins) valid. Define before pico_sdk_init() so it reaches
-# the SDK's own sources.
-add_compile_definitions(PICO_RP2350A=0)
+# rev2 board uses the RP2350A (30 GPIO, GP0..29). Match the SDK to the A part.
+# (rev1 was the RP2354B/48-GPIO; PICO_RP2350A=0 selected that — gone on rev2.)
+add_compile_definitions(PICO_RP2350A=1)
 
 include(pico_sdk_import.cmake)
 
@@ -117,56 +114,24 @@ target_link_libraries(picoros zenohpico::lib microcdr)
 # ---------------------------------------------------------------------------
 # Firmware
 # ---------------------------------------------------------------------------
+# TEMPORARY (rev2 bring-up): axon_firmware == PIO UART loopback tester.
+# Restore the real firmware with:  git checkout -- CMakeLists.txt
 add_executable(axon_firmware
-    main.c
-    usb_descriptors.c
-    src/led.c
-    src/dbg.c
-    src/config/axon_cfg.c
-    src/config/cfg_console.c
-    src/config/motor_test.c
-    src/bus/half_duplex.c
-    src/bus/lidar_uart.c
-    src/bus/ddsm_port.c
-    src/motors/ddsm210.c
-    src/motors/st3215.c
-    src/sensors/bno055.c
-    src/ros/axon_node.c
+    src/test/pio_uart_test.c
 )
 
-pico_set_program_name(axon_firmware "Axon ROS Node")
-pico_set_program_version(axon_firmware "3.0")
+pico_set_program_name(axon_firmware "Axon PIO UART Test")
+pico_set_program_version(axon_firmware "0.1")
 
-# UART for debug output (USB is the composite device)
-pico_enable_stdio_uart(axon_firmware 1)
-pico_enable_stdio_usb(axon_firmware 0)
+pico_enable_stdio_uart(axon_firmware 0)
+pico_enable_stdio_usb(axon_firmware 1)
 
 target_link_libraries(axon_firmware
     pico_stdlib
-    pico_unique_id
-    pico_multicore
-    pico_rand
-    tinyusb_device
-    tinyusb_board
     hardware_pio
     hardware_clocks
-    hardware_uart
-    hardware_i2c
-    hardware_pwm
-    hardware_irq
-    hardware_flash
-    picoros
-)
-
-target_include_directories(axon_firmware PRIVATE
-    ${CMAKE_CURRENT_LIST_DIR}
-    ${CMAKE_CURRENT_LIST_DIR}/src
-    ${CMAKE_CURRENT_LIST_DIR}/src/bus
-    ${CMAKE_CURRENT_LIST_DIR}/src/zenoh_port
 )
 
 pico_add_extra_outputs(axon_firmware)
-
-# Generate PIO headers
 pico_generate_pio_header(axon_firmware ${CMAKE_CURRENT_LIST_DIR}/src/pio/uart_tx.pio)
 pico_generate_pio_header(axon_firmware ${CMAKE_CURRENT_LIST_DIR}/src/pio/uart_rx.pio)
