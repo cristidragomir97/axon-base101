@@ -1,0 +1,22 @@
+services:
+  zenoh-axon:
+    build:
+      context: .
+      # Match the firmware's vendored zenoh-pico version (see the Dockerfile).
+      args:
+        ZENOH_REF: "1.9.0"
+    image: axon-zenohd
+    container_name: axon-zenohd
+    restart: unless-stopped
+
+    # host networking so rmw_zenoh on the host reaches the router on tcp/7447
+    # without extra port mapping. Drop this and use `ports: ["7447:7447"]`
+    # if you prefer a bridged network.
+    network_mode: host
+
+    # Map the Axon zenoh serial port into the container. This relies on the
+    # udev rule that creates /dev/axon-zenoh (see ../99-axon-devices.rules and
+    # ../install.sh). If you don't have the symlink, point at the raw node:
+    #   - "/dev/ttyACM0:/dev/axon-zenoh"
+    devices:
+      - "/dev/axon-zenoh:/dev/axon-zenoh"
